@@ -1,7 +1,7 @@
+import asyncio
 import json
 import logging
 import os
-import asyncio
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -106,6 +106,7 @@ try:
     airtable_api_key = os.getenv("AIRTABLE_API_KEY")
     base_id = os.getenv("AIRTABLE_BASE_ID")
     table_id = os.getenv("AIRTABLE_TABLE_ID")
+    view_id = os.getenv("AIRTABLE_VIEW_ID")
     
     if not all([airtable_api_key, base_id, table_id]):
         raise ValueError("Missing required Airtable environment variables")
@@ -115,25 +116,30 @@ try:
     base = airtable_api.base(base_id)
     airtable = base.table(table_id)
     
-    # Test Airtable connection and get field names
+    # Get actual column names from Airtable and create mapping
     try:
-        # First try to list tables to verify base access
-        test_records = airtable.all(max_records=1, view=os.getenv("AIRTABLE_VIEW_ID"))
-        logger.info("Successfully connected to Airtable")
-        
-        if test_records:
-            sample_record = test_records[0]
-            logger.debug(f"Sample record structure: {json.dumps(sample_record, indent=2)}")
-            
-            # Get field names from the record
-            field_names = sample_record.get('fields', {}).keys()
-            logger.info(f"Available fields: {', '.join(field_names)}")
-        else:
+        # Get table schema by fetching a record
+        test_records = airtable.all(max_records=1, view=view_id)
+        if not test_records:
             logger.warning("No existing records found in Airtable")
+            FIELD_MAPPING = {}
+        else:
+            sample_record = test_records[0]
+            fields = sample_record.get('fields', {})
+            logger.debug(f"Sample Airtable record structure: {json.dumps(fields, indent=2)}")
             
+            # Create field mapping
+            FIELD_MAPPING = {}
+            for field_name in fields.keys():
+                normalized_name = field_name.upper().replace(' ', '_')
+                FIELD_MAPPING[normalized_name] = field_name
+                logger.debug(f"Mapped field: {normalized_name} -> {field_name}")
+        
+        logger.info(f"Airtable field mapping: {json.dumps(FIELD_MAPPING, indent=2)}")
+        
     except Exception as e:
-        logger.error(f"Failed to access Airtable: {str(e)}")
-        raise ValueError(f"Airtable access test failed: {str(e)}")
+        logger.error(f"Failed to get Airtable schema: {str(e)}")
+        raise
 
     # Initialize other clients
     slack_client = WebClient(token=os.getenv("SLACK_BOT_TOKEN"))
@@ -272,22 +278,35 @@ async def validate_airtable_record(record_id: str, job: UpworkJob) -> bool:
     """Validate that an Airtable record exists and is accessible"""
     try:
         try:
-            # Try to get the record
             record = airtable.get(record_id)
             logger.info(f"Found existing record: {record_id}")
             return True
         except Exception as e:
-            # If record doesn't exist, create it with initial data
+            # Create new record with mapped field names
             logger.info(f"Record {record_id} not found, creating new record")
+            
+            # Create minimal record first
             new_record = airtable.create({
-                "URL": job.url,
-                "Title": job.title,
-                "Description": job.description,
-                "Budget": job.budget,
-                "Hourly Range": job.hourly_range,
-                "Estimated Time": job.estimated_time,
-                "Skills": job.skills
+                FIELD_MAPPING.get('TITLE', 'Title'): job.title,
+                FIELD_MAPPING.get('URL', 'URL'): job.url
             })
+            
+            # Then update with full details
+            update_data = {}
+            if 'DESCRIPTION' in FIELD_MAPPING:
+                update_data[FIELD_MAPPING['DESCRIPTION']] = job.description
+            if 'BUDGET' in FIELD_MAPPING:
+                update_data[FIELD_MAPPING['BUDGET']] = job.budget
+            if 'HOURLY_RANGE' in FIELD_MAPPING:
+                update_data[FIELD_MAPPING['HOURLY_RANGE']] = job.hourly_range
+            if 'ESTIMATED_TIME' in FIELD_MAPPING:
+                update_data[FIELD_MAPPING['ESTIMATED_TIME']] = job.estimated_time
+            if 'SKILLS' in FIELD_MAPPING:
+                update_data[FIELD_MAPPING['SKILLS']] = job.skills
+            
+            if update_data:
+                airtable.update(new_record['id'], update_data)
+            
             logger.info(f"Created new record: {new_record['id']}")
             return True
             
@@ -306,16 +325,16 @@ async def process_single_job(job: UpworkJob) -> Dict[str, Any]:
             logger.error(f"Could not validate/create record: {job.airtable_record_id}")
             raise ValueError(f"Could not validate/create Airtable record: {job.airtable_record_id}")
         
-        # Update job details in Airtable
+        # Update job details in Airtable using exact field names
         try:
             update_data = {
-                "URL": job.url,
-                "Title": job.title,
-                "Description": job.description,
-                "Budget": job.budget,
-                "Hourly Range": job.hourly_range,
-                "Estimated Time": job.estimated_time,
-                "Skills": job.skills
+                FIELD_MAPPING.get('URL', 'url'): job.url,
+                FIELD_MAPPING.get('TITLE', 'title'): job.title,
+                FIELD_MAPPING.get('DESCRIPTION', 'description'): job.description,
+                FIELD_MAPPING.get('BUDGET', 'budget'): job.budget,
+                FIELD_MAPPING.get('HOURLY_RANGE', 'hourly_range'): job.hourly_range,
+                FIELD_MAPPING.get('ESTIMATED_TIME', 'estimated_time'): job.estimated_time,
+                FIELD_MAPPING.get('SKILLS', 'skills'): job.skills
             }
             airtable.update(job.airtable_record_id, update_data)
             logger.info("Updated job details in Airtable")
