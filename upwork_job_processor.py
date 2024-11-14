@@ -44,59 +44,35 @@ logger.info("Environment variables loaded")
 # Initialize FastAPI app
 app = FastAPI(title="Upwork Job Processor")
 
-async def get_airtable_schema() -> Dict[str, str]:
-    """
-    Fetch Airtable table schema and return column IDs
-    """
-    try:
-        logger.info("Fetching Airtable schema...")
-        
-        # Get table metadata using the correct API methods
-        base_id = os.getenv("AIRTABLE_BASE_ID")
-        table_name = os.getenv("AIRTABLE_TABLE_NAME")
-        
-        # First, get a single record to analyze its structure
-        records = airtable.all(max_records=1)
-        if not records:
-            raise ValueError("No records found in Airtable to analyze schema")
-            
-        # Extract field names from the first record
-        sample_record = records[0]
-        fields = sample_record.get('fields', {})
-        
-        # Map field names to their normalized versions
-        column_ids = {}
-        for field_name in fields.keys():
-            normalized_name = field_name.upper().replace(' ', '_')
-            column_ids[normalized_name] = field_name  # Store original field name
-            logger.debug(f"Found field: {field_name} -> {normalized_name}")
-        
-        # Add known field mappings
-        known_fields = {
-            'URL': 'url',
-            'TITLE': 'title',
-            'DESCRIPTION': 'description',
-            'SCORE': 'Score',
-            'PROPOSAL': 'Proposal',
-            'BUDGET': 'budget',
-            'HOURLY_RANGE': 'hourlyRange',
-            'ESTIMATED_TIME': 'estimatedTime',
-            'SKILLS': 'skills'
-        }
-        
-        # Update column_ids with known fields if they're not already present
-        for key, value in known_fields.items():
-            if key not in column_ids:
-                column_ids[key] = value
-                logger.debug(f"Added known field mapping: {key} -> {value}")
-        
-        logger.info("Successfully fetched Airtable schema")
-        logger.debug(f"Final column mappings: {json.dumps(column_ids, indent=2)}")
-        return column_ids
-        
-    except Exception as e:
-        logger.error(f"Error fetching Airtable schema: {str(e)}", exc_info=True)
-        raise
+# Initialize empty dictionaries for field mappings
+FIELD_MAPPING: Dict[str, str] = {}
+AIRTABLE_COLUMN_IDS: Dict[str, str] = {}
+
+def initialize_field_mappings(fields: Dict[str, Any]) -> None:
+    """Initialize global field mappings"""
+    global FIELD_MAPPING, AIRTABLE_COLUMN_IDS
+    
+    # Create exact field mapping based on what we see in Airtable
+    FIELD_MAPPING.clear()  # Clear existing mappings
+    FIELD_MAPPING.update({
+        'URL': 'url',
+        'TITLE': 'title',
+        'DESCRIPTION': 'description',
+        'BUDGET': 'budget',
+        'HOURLY_RANGE': 'hourlyRange',
+        'ESTIMATED_TIME': 'estimatedTime',
+        'SKILLS': 'skills',
+        'CREATED': 'Created',
+        'SCORE': 'Score',
+        'PROPOSAL': 'Proposal'
+    })
+    
+    # Set both mappings to be the same
+    AIRTABLE_COLUMN_IDS.clear()  # Clear existing mappings
+    AIRTABLE_COLUMN_IDS.update(FIELD_MAPPING)
+    
+    logger.info(f"Using field mapping: {json.dumps(FIELD_MAPPING, indent=2)}")
+    logger.info(f"Using column IDs: {json.dumps(AIRTABLE_COLUMN_IDS, indent=2)}")
 
 # Initialize clients
 try:
@@ -118,24 +94,16 @@ try:
     
     # Get actual column names from Airtable and create mapping
     try:
-        # Get table schema by fetching a record
         test_records = airtable.all(max_records=1, view=view_id)
         if not test_records:
             logger.warning("No existing records found in Airtable")
-            FIELD_MAPPING = {}
         else:
             sample_record = test_records[0]
             fields = sample_record.get('fields', {})
             logger.debug(f"Sample Airtable record structure: {json.dumps(fields, indent=2)}")
             
-            # Create field mapping
-            FIELD_MAPPING = {}
-            for field_name in fields.keys():
-                normalized_name = field_name.upper().replace(' ', '_')
-                FIELD_MAPPING[normalized_name] = field_name
-                logger.debug(f"Mapped field: {normalized_name} -> {field_name}")
-        
-        logger.info(f"Airtable field mapping: {json.dumps(FIELD_MAPPING, indent=2)}")
+            # Initialize field mappings
+            initialize_field_mappings(fields)
         
     except Exception as e:
         logger.error(f"Failed to get Airtable schema: {str(e)}")
@@ -222,10 +190,13 @@ async def update_airtable_score(record_id: str, score: int) -> None:
             logger.error(f"Failed to find record {record_id}: {str(e)}")
             raise ValueError(f"Record {record_id} not found in Airtable")
         
+        # Use FIELD_MAPPING instead of AIRTABLE_COLUMN_IDS
+        update_data = {
+            FIELD_MAPPING['SCORE']: score
+        }
+        
         # Attempt update
-        result = airtable.update(record_id, {
-            AIRTABLE_COLUMN_IDS['SCORE']: score
-        })
+        result = airtable.update(record_id, update_data)
         
         logger.info(f"Successfully updated Airtable record")
         logger.debug(f"Airtable update result: {result}")
@@ -274,70 +245,69 @@ async def update_airtable_proposal(record_id: str, proposal: str) -> None:
         logger.error(f"Error updating Airtable proposal: {str(e)}", exc_info=True)
         raise
 
-async def validate_airtable_record(record_id: str, job: UpworkJob) -> bool:
-    """Validate that an Airtable record exists and is accessible"""
+async def validate_airtable_record(record_id: str, job: UpworkJob) -> tuple[bool, str]:
+    """
+    Validate that an Airtable record exists and is accessible
+    Returns (success, record_id)
+    """
     try:
         try:
             record = airtable.get(record_id)
             logger.info(f"Found existing record: {record_id}")
-            return True
+            return True, record_id
         except Exception as e:
-            # Create new record with mapped field names
+            # Create new record with exact field names
             logger.info(f"Record {record_id} not found, creating new record")
             
-            # Create minimal record first
+            # Create record with all non-computed fields
             new_record = airtable.create({
-                FIELD_MAPPING.get('TITLE', 'Title'): job.title,
-                FIELD_MAPPING.get('URL', 'URL'): job.url
+                'url': job.url,
+                'title': job.title,
+                'description': job.description,
+                'budget': job.budget,
+                'hourlyRange': job.hourly_range,
+                'estimatedTime': job.estimated_time,
+                'skills': job.skills
             })
             
-            # Then update with full details
-            update_data = {}
-            if 'DESCRIPTION' in FIELD_MAPPING:
-                update_data[FIELD_MAPPING['DESCRIPTION']] = job.description
-            if 'BUDGET' in FIELD_MAPPING:
-                update_data[FIELD_MAPPING['BUDGET']] = job.budget
-            if 'HOURLY_RANGE' in FIELD_MAPPING:
-                update_data[FIELD_MAPPING['HOURLY_RANGE']] = job.hourly_range
-            if 'ESTIMATED_TIME' in FIELD_MAPPING:
-                update_data[FIELD_MAPPING['ESTIMATED_TIME']] = job.estimated_time
-            if 'SKILLS' in FIELD_MAPPING:
-                update_data[FIELD_MAPPING['SKILLS']] = job.skills
-            
-            if update_data:
-                airtable.update(new_record['id'], update_data)
-            
-            logger.info(f"Created new record: {new_record['id']}")
-            return True
+            new_record_id = new_record['id']
+            logger.info(f"Created new record: {new_record_id}")
+            logger.debug(f"New record data: {json.dumps(new_record, indent=2)}")
+            return True, new_record_id
             
     except Exception as e:
         logger.error(f"Record validation failed for {record_id}: {str(e)}")
-        return False
+        return False, ""
 
 async def process_single_job(job: UpworkJob) -> Dict[str, Any]:
     """Process a single Upwork job"""
     try:
         logger.info(f"\nProcessing job: {job.title}")
-        logger.info(f"Airtable Record ID: {job.airtable_record_id}")
+        logger.info(f"Original Airtable Record ID: {job.airtable_record_id}")
         
         # First ensure the record exists or create it
-        if not await validate_airtable_record(job.airtable_record_id, job):
-            logger.error(f"Could not validate/create record: {job.airtable_record_id}")
-            raise ValueError(f"Could not validate/create Airtable record: {job.airtable_record_id}")
+        success, record_id = await validate_airtable_record(job.airtable_record_id, job)
+        if not success:
+            logger.error(f"Could not validate/create record")
+            raise ValueError("Could not validate/create Airtable record")
+        
+        # Use the new record_id for all operations
+        logger.info(f"Using Airtable Record ID: {record_id}")
         
         # Update job details in Airtable using exact field names
         try:
             update_data = {
-                FIELD_MAPPING.get('URL', 'url'): job.url,
-                FIELD_MAPPING.get('TITLE', 'title'): job.title,
-                FIELD_MAPPING.get('DESCRIPTION', 'description'): job.description,
-                FIELD_MAPPING.get('BUDGET', 'budget'): job.budget,
-                FIELD_MAPPING.get('HOURLY_RANGE', 'hourly_range'): job.hourly_range,
-                FIELD_MAPPING.get('ESTIMATED_TIME', 'estimated_time'): job.estimated_time,
-                FIELD_MAPPING.get('SKILLS', 'skills'): job.skills
+                'url': job.url,
+                'title': job.title,
+                'description': job.description,
+                'budget': job.budget,
+                'hourlyRange': job.hourly_range,
+                'estimatedTime': job.estimated_time,
+                'skills': job.skills
             }
-            airtable.update(job.airtable_record_id, update_data)
+            airtable.update(record_id, update_data)  # Use new record_id
             logger.info("Updated job details in Airtable")
+            logger.debug(f"Updated with data: {json.dumps(update_data, indent=2)}")
         except Exception as e:
             logger.error(f"Error updating job details in Airtable: {str(e)}")
             raise
@@ -346,22 +316,22 @@ async def process_single_job(job: UpworkJob) -> Dict[str, Any]:
         score = await score_job(job)
         logger.info(f"Final job score: {score}")
         
-        # Update score in Airtable
-        await update_airtable_score(job.airtable_record_id, score)
+        # Update score in Airtable using new record_id
+        await update_airtable_score(record_id, score)
         
         result = {
             "status": "success",
             "job_title": job.title,
-            "airtable_record_id": job.airtable_record_id,
+            "airtable_record_id": record_id,  # Return the new record_id
             "score": score
         }
         
-        # Generate and save proposal if score is high enough
+        # Generate and save proposal if score > 24
         if score > 24:
             logger.info(f"Score {score} > 24, generating proposal")
             proposal = await generate_proposal(job)
             if proposal:
-                await update_airtable_proposal(job.airtable_record_id, proposal)
+                await update_airtable_proposal(record_id, proposal)  # Use new record_id
                 result["proposal"] = proposal
                 logger.info(f"Generated and saved proposal")
         
