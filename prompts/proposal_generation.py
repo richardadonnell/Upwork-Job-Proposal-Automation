@@ -15,7 +15,9 @@ If possible, use the Client's first name in the proposal somewhere.
 
 If the job description wants proof of Make.com scenario experience, please include this link in the proposal: https://bit.ly/rad-make-scenarios and mention this is censored for privacy, or mention they can visit my Upwork Profile for examples of Make.com projects.
 
-Do not use formatting (pound signs, asterisks, etc)."""
+Do not use formatting (pound signs, asterisks, etc).
+
+My name is Richard."""
 
 def format_job_details(job) -> str:
     """Format job details for the proposal prompt"""
