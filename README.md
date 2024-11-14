@@ -73,20 +73,12 @@ This project automates the process of sending job proposals on Upwork. It levera
 - When a new job is posted, the server processes the job data, generates a proposal using OpenAI, and stores the job data in Airtable.
 - A notification is sent to a specified Slack channel with the details of the job and the generated proposal.
 
-## Error Handling
+### Testing with Example Job Data
 
-- The server includes error handling for missing environment variables and issues with starting the ngrok tunnel.
-- If an error occurs while starting the server, ngrok tunnels are cleaned up to prevent orphaned processes.
+To test the webhook with example job data, you can use the following `curl` command. This command sends a POST request to the local server with a JSON file containing job data:
 
-## Contributing
-
-1. Fork the repository.
-2. Create a new branch (`git checkout -b feature-branch`).
-3. Make your changes.
-4. Commit your changes (`git commit -m 'Add some feature'`).
-5. Push to the branch (`git push origin feature-branch`).
-6. Open a pull request.
-
-## License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+```
+curl -X POST http://localhost:8000/webhook/upwork-jobs \
+  -H "Content-Type: application/json" \
+  -d @example-hourly-job.json
+```
