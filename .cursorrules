@@ -32,3 +32,5 @@ Error Handling and Validation
 - Use custom error types or error factories for consistent error handling.
 
 Your job is to help me convert a JSON file from a Make.com scenario into a Python script I can run locally to process job data from Upwork.
+
+!!! THINK CAREFULLY. STEP BY STEP. !!!

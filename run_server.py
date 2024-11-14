@@ -1,9 +1,12 @@
-import os
-from pyngrok import ngrok, conf
-import uvicorn
 import asyncio
+import os
+from pathlib import Path
+
+import uvicorn
+from dotenv import load_dotenv, set_key
+from pyngrok import conf, ngrok
+
 from upwork_job_processor import app
-from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
@@ -22,8 +25,15 @@ async def start_server():
         http_tunnel = ngrok.connect(8000)
         public_url = http_tunnel.public_url
         
+        # Get the path to .env file
+        env_path = Path('.env')
+        
+        # Update .env file with the new URL
+        set_key(env_path, "NGROK_PUBLIC_URL", f"{public_url}/webhook/upwork-jobs")
+        
         print(f"\nNgrok tunnel established:")
         print(f"Public URL: {public_url}/webhook/upwork-jobs")
+        print("URL has been saved to .env file")
         print("Use this URL in your Chrome Extension")
         
         # Run the FastAPI app
